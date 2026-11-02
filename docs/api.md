@@ -30,6 +30,7 @@ through MCP. Query parameters are URL-encoded.
 | GET | /book/GetBookPageByEdition | editionId | Client and public live response |
 | POST | /patron/addBookToShelf | editionId | Client and live true response (2026-11-02) |
 | GET | /patron/SendToKindle | editionId | Client and live true response (2026-11-02); no delivery |
+| GET | /patron/getDownloadUrl | editionId, downloadFormat | Client and live response (2026-11-02) |
 
 Search's format facet returns `EBook`. Presentation cards can have an audio
 edition in `bookUrl` even when filtered to e-books; never borrow that identifier
@@ -39,11 +40,27 @@ without resolving the work's `editions`. Each edition has `format.type`,
 format enum is 4=Ebook, 6=Epub. Only these types are allowed for mutation.
 
 Only selected bibliographic data and action booleans leave the client. It does
-not expose raw patron objects, player/download URLs, cookie values or upstream
+not expose raw patron objects, player URLs, download URLs (except the EPUB link from `get_epub_link`), cookie values or upstream
 error bodies. A true Kindle response means accepted, not proof of delivery.
 Neither mutation is automatically retried. Despite its GET method, SendToKindle
 is a write and disabled in read-only mode. An HTTP redirect is never followed
 for a catalog/API call or mutation.
+
+## EPUB download link
+
+The client's `DownloadFormat` enum is 0=NotSet, 1=Html, 2=Epub, 3=Audio. The
+book page shows "Last ned EPUB" when an edition has `showDownloadEpubButton`;
+the server also requires the edition to be on the patron shelf (borrowed).
+`getDownloadUrl` returns a JSON string. Observed live: an `https://dod.nlb.no`
+URL whose path contains the borrower number, an opaque token and
+`<editionId>.epub`, with no query. A cookieless GET returned 200,
+`application/octet-stream`, `attachment;filename="<editionId>.epub"` and a ZIP
+(EPUB) body. HEAD gives no usable size, so the server asks for one byte with
+`Range: bytes=0-0` and reads the total from `Content-Range`.
+
+The link is a bearer capability that also carries personal data. The server
+accepts only https links on dod.nlb.no ending in `.epub`, returns them only in
+the tool result, and never puts them in spans, logs or errors.
 
 ## Authentication
 

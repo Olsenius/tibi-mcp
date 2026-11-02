@@ -15,6 +15,7 @@ type tibiAPI interface {
 	Book(context.Context, string) (any, error)
 	Borrow(context.Context, string) (any, error)
 	SendKindle(context.Context, string) (any, error)
+	EPUBLink(context.Context, string) (any, error)
 }
 
 type searchInput struct {
@@ -42,7 +43,7 @@ func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
 }
 
 func newServer(api tibiAPI, readOnly bool) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "tibi", Title: "Tibi e-books", Version: version}, &mcp.ServerOptions{Instructions: "Search Tibi e-books, inspect an edition, borrow it and send it to the Kindle address already configured on the Tibi profile. Only borrow or send books requested by the user. Kindle delivery requires profile setup and Tibi's file-size eligibility. Do not retry an uncertain write automatically."})
+	s := mcp.NewServer(&mcp.Implementation{Name: "tibi", Title: "Tibi e-books", Version: version}, &mcp.ServerOptions{Instructions: "Search Tibi e-books, inspect an edition, borrow it, send it to the Kindle address already configured on the Tibi profile, or get an EPUB download link for a borrowed book. Only borrow or send books requested by the user. Kindle delivery requires profile setup and Tibi's file-size eligibility. Do not retry an uncertain write automatically."})
 	s.AddReceivingMiddleware(traceMCP)
 	yes, no := true, false
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &yes}
@@ -68,6 +69,7 @@ func newServer(api tibiAPI, readOnly bool) *mcp.Server {
 		})
 	}
 	addEdition("get_ebook", "Resolve a catalog_edition_id or edition_id to e-book editions and their borrowing and Kindle eligibility. Pass it as edition_id.", ro, api.Book)
+	addEdition("get_epub_link", "Get a direct EPUB download link for an already borrowed e-book, so another tool can fetch the file. The link needs no login and contains the borrower number: pass it only to the service that should fetch the book, and do not show it unless asked.", ro, api.EPUBLink)
 	if !readOnly {
 		addEdition("borrow_ebook", "Borrow the requested e-book edition. Does not send to Kindle.", write, api.Borrow)
 		addEdition("send_to_kindle", "Send an already borrowed, eligible e-book to the Kindle address configured on the Tibi profile. Do not retry an uncertain result automatically.", write, api.SendKindle)

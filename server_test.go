@@ -28,6 +28,7 @@ func (f *fakeAPI) Search(context.Context, string, int) (any, error) { return f.r
 func (f *fakeAPI) Book(context.Context, string) (any, error)        { return f.result("book") }
 func (f *fakeAPI) Borrow(context.Context, string) (any, error)      { return f.result("borrow") }
 func (f *fakeAPI) SendKindle(context.Context, string) (any, error)  { return f.result("kindle") }
+func (f *fakeAPI) EPUBLink(context.Context, string) (any, error)    { return f.result("epub") }
 
 func session(t *testing.T, api tibiAPI, readOnly bool) *mcp.ClientSession {
 	t.Helper()
@@ -52,7 +53,7 @@ func TestReadOnlyDoesNotExposeWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 2 {
+	if len(list.Tools) != 3 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	for _, name := range []string{"borrow_ebook", "send_to_kindle"} {
@@ -69,7 +70,7 @@ func TestReadOnlyDoesNotExposeWrites(t *testing.T) {
 func TestToolDispatchAndValidation(t *testing.T) {
 	f := &fakeAPI{}
 	cs := session(t, f, false)
-	for _, name := range []string{"get_ebook", "borrow_ebook", "send_to_kindle"} {
+	for _, name := range []string{"get_ebook", "borrow_ebook", "send_to_kindle", "get_epub_link"} {
 		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"edition_id": "123"}})
 		if err != nil || res.IsError {
 			t.Fatalf("%s failed: %v", name, err)
@@ -79,7 +80,7 @@ func TestToolDispatchAndValidation(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("search failed: %v", err)
 	}
-	if strings.Join(f.calls, ",") != "book,borrow,kindle,search" {
+	if strings.Join(f.calls, ",") != "book,borrow,kindle,epub,search" {
 		t.Fatal(f.calls)
 	}
 	for _, args := range []map[string]any{{"query": " "}, {"query": "book", "page": -1}, {"query": "book", "page": 10001}} {
@@ -88,7 +89,7 @@ func TestToolDispatchAndValidation(t *testing.T) {
 			t.Fatalf("invalid search accepted: %v", err)
 		}
 	}
-	if len(f.calls) != 4 {
+	if len(f.calls) != 5 {
 		t.Fatal("invalid input reached upstream")
 	}
 }

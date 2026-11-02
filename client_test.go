@@ -155,3 +155,87 @@ func TestKindleConnectionFailureIsNotReplayed(t *testing.T) {
 		t.Fatalf("uncertain write replayed: calls=%d error=%v", calls.Load(), err)
 	}
 }
+
+func TestEPUBLink(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		on, epub      bool
+		link          string
+		wantLinkCalls int
+		wantError     bool
+	}{
+		{"borrowed", true, true, "", 1, false},
+		{"not borrowed", false, true, "", 0, true},
+		{"no epub button", true, false, "", 0, true},
+		{"audio rejected", true, true, "", 0, true},
+		{"untrusted host", true, true, "https://example.invalid/private-card/123.epub", 1, true},
+		{"plain http", true, true, "http://HOST/content/private-card/123.epub", 1, true},
+		{"not epub", true, true, "https://HOST/content/private-card/123.html", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			linkCalls, heads := 0, 0
+			var srv *httptest.Server
+			srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/boker/book/GetBookPageByEdition":
+					p := fakePage(true, tc.on, false, 4)
+					if tc.name == "audio rejected" {
+						p = fakePage(true, tc.on, false, 2)
+					}
+					p.Editions[0].EPUB = tc.epub
+					json.NewEncoder(w).Encode(p)
+				case "/boker/patron/getDownloadUrl":
+					linkCalls++
+					if r.URL.Query().Get("editionId") != "123" || r.URL.Query().Get("downloadFormat") != "2" || r.Method != "GET" {
+						t.Error("wrong download request")
+					}
+					link := tc.link
+					if link == "" {
+						link = srv.URL + "/content/private-card/123/x/123.epub"
+					}
+					json.NewEncoder(w).Encode(strings.ReplaceAll(link, "HOST", strings.TrimPrefix(srv.URL, "https://")))
+				case "/content/private-card/123/x/123.epub":
+					heads++
+					if len(r.Cookies()) != 0 {
+						t.Error("size check must not send cookies")
+					}
+					if r.Method == http.MethodHead {
+						// Like dod.nlb.no, give no usable HEAD answer.
+						w.WriteHeader(http.StatusMethodNotAllowed)
+						return
+					}
+					if r.Header.Get("Range") != "bytes=0-0" {
+						t.Error("size fallback must request one byte")
+					}
+					w.Header().Set("Content-Range", "bytes 0-0/825157")
+					w.WriteHeader(http.StatusPartialContent)
+					w.Write([]byte("P"))
+				default:
+					t.Errorf("unexpected route %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			c := newClient("", "")
+			c.base = srv.URL
+			c.http.Transport = srv.Client().Transport
+			c.downloadHost = strings.TrimPrefix(srv.URL, "https://")
+			v, err := c.EPUBLink(context.Background(), "123")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error=%v", err)
+			}
+			if linkCalls != tc.wantLinkCalls {
+				t.Fatalf("link calls %d, want %d", linkCalls, tc.wantLinkCalls)
+			}
+			if err != nil {
+				if strings.Contains(err.Error(), "private-") {
+					t.Fatal("private data in error")
+				}
+				return
+			}
+			m := v.(map[string]any)
+			if m["download_url"] != srv.URL+"/content/private-card/123/x/123.epub" || m["filename"] != "123.epub" || m["mime_type"] != "application/epub+zip" || m["size_bytes"] != int64(825157) || heads != 2 {
+				t.Fatalf("unexpected result %v heads=%d", m, heads)
+			}
+		})
+	}
+}

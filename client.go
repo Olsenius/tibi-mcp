@@ -27,11 +27,12 @@ type client struct {
 	mu              sync.Mutex
 	http            *http.Client
 	base, card, pin string
+	downloadHost    string
 }
 
 func newClient(card, pin string) *client {
 	jar, _ := cookiejar.New(nil)
-	return &client{http: &http.Client{Jar: jar, Timeout: 30 * time.Second}, base: "https://tibi.no", card: card, pin: pin}
+	return &client{http: &http.Client{Jar: jar, Timeout: 30 * time.Second}, base: "https://tibi.no", card: card, pin: pin, downloadHost: "dod.nlb.no"}
 }
 
 // Only fixed route names and response status are recorded. No URLs, queries,
@@ -83,6 +84,7 @@ type edition struct {
 	Copies     bool   `json:"isCopiesAvailableForLoan"`
 	LoanButton bool   `json:"showLoanBookButton"`
 	Kindle     bool   `json:"showKindleButton"`
+	EPUB       bool   `json:"showDownloadEpubButton"`
 	Shelf      struct {
 		On bool `json:"isOnPatronShelf"`
 	} `json:"editionOnPatronShelf"`
@@ -255,6 +257,91 @@ func (c *client) action(ctx context.Context, id string, kindle bool) (any, error
 	}
 	return map[string]any{"status": status, "edition_id": id}, nil
 }
+
+// downloadFormatEPUB is DownloadFormat.Epub in Tibi's public client.
+const downloadFormatEPUB = "2"
+
+// EPUBLink returns Tibi's direct EPUB link for a borrowed e-book. The link works
+// without cookies and contains the borrower number, so it is only returned to
+// the caller and never logged or put in spans.
+func (c *client) EPUBLink(ctx context.Context, id string) (any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.page(ctx, id, true)
+	if err != nil {
+		return nil, err
+	}
+	var selected *edition
+	for i := range p.Editions {
+		if e := &p.Editions[i]; e.ID == id && (e.Format.Type == 4 || e.Format.Type == 6) {
+			selected = e
+			break
+		}
+	}
+	if selected == nil {
+		return nil, errors.New("select an e-book edition_id from get_ebook")
+	}
+	if !selected.Shelf.On || !selected.EPUB {
+		return nil, errors.New("EPUB unavailable: borrow the e-book first")
+	}
+	var link string
+	if err := c.json(ctx, "GET", "/patron/getDownloadUrl", url.Values{"editionId": {id}, "downloadFormat": {downloadFormatEPUB}}, &link); err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme != "https" || u.Host != c.downloadHost || u.User != nil || !strings.HasSuffix(strings.ToLower(u.Path), ".epub") {
+		return nil, errUpstream
+	}
+	result := map[string]any{
+		"edition_id":   id,
+		"download_url": u.String(),
+		"filename":     id + ".epub",
+		"mime_type":    "application/epub+zip",
+		"note":         "The link needs no login, contains the borrower number and grants access to the file. Pass it only to the service that should fetch the book.",
+	}
+	if size := c.contentLength(ctx, u.String()); size > 0 {
+		result["size_bytes"] = size
+	}
+	return result, nil
+}
+
+// contentLength asks for the file size without cookies or redirects: first a
+// HEAD, then a one-byte range request. A failure only omits the size.
+func (c *client) contentLength(ctx context.Context, link string) int64 {
+	ctx, span := otel.Tracer("tibi-mcp").Start(ctx, "epub size", trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	hc := &http.Client{Transport: c.http.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		req, err := http.NewRequestWithContext(ctx, method, link, nil)
+		if err != nil {
+			return 0
+		}
+		if method == http.MethodGet {
+			req.Header.Set("Range", "bytes=0-0")
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		switch {
+		case method == http.MethodHead && resp.StatusCode == http.StatusOK && resp.ContentLength > 0:
+			return resp.ContentLength
+		case resp.StatusCode == http.StatusPartialContent:
+			// Content-Range: bytes 0-0/<total>
+			cr := resp.Header.Get("Content-Range")
+			if i := strings.LastIndex(cr, "/"); i >= 0 {
+				if n, err := strconv.ParseInt(cr[i+1:], 10, 64); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func (c *client) Borrow(ctx context.Context, id string) (any, error) { return c.action(ctx, id, false) }
 func (c *client) SendKindle(ctx context.Context, id string) (any, error) {
 	return c.action(ctx, id, true)

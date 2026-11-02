@@ -163,7 +163,7 @@ func safeMethod(method string) string {
 }
 func safeTool(name string) string {
 	switch name {
-	case "search_ebooks", "get_ebook", "borrow_ebook", "send_to_kindle":
+	case "search_ebooks", "get_ebook", "borrow_ebook", "send_to_kindle", "get_epub_link":
 		return name
 	default:
 		return "unknown"

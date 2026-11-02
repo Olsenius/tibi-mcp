@@ -1,7 +1,8 @@
 # tibi-mcp
 
-Go MCP server for searching Tibi e-books, borrowing an exact e-book edition and
-requesting delivery through Tibi's existing Kindle service. Remote access goes
+Go MCP server for searching Tibi e-books, borrowing an exact e-book edition,
+requesting delivery through Tibi's existing Kindle service and getting an EPUB
+download link for a borrowed book. Remote access goes
 through mcp-gateway; the server uses stateless Streamable HTTP at `/mcp`.
 
 ## Status
@@ -47,10 +48,14 @@ integrating another gateway deployment. Account configuration is environment-onl
 4. `send_to_kindle(edition_id)` requests sending an already borrowed, eligible
    e-book to the address configured in Tibi. `send_requested` means Tibi accepted
    the request, not confirmed delivery to the device.
+5. `get_epub_link(edition_id)` returns Tibi's direct EPUB link for a borrowed
+   e-book, with filename, MIME type and size when known, so another tool can
+   fetch the file. The link works without login and contains the borrower
+   number: pass it only to the service that should fetch the book.
 
 Search hits can reference an audio edition of a work that also has an e-book;
 resolve them with `get_ebook` before borrowing. Writes reject non-e-book IDs.
-The two write tools are absent in read-only mode. Never automatically retry a
+The two write tools are absent in read-only mode; `get_epub_link` is read-only. Never automatically retry a
 write after a timeout: the first request may have succeeded.
 
 Register the Kindle address under Tibi's profile and approve
