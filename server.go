@@ -16,6 +16,12 @@ type tibiAPI interface {
 	Borrow(context.Context, string) (any, error)
 	SendKindle(context.Context, string) (any, error)
 	EPUBLink(context.Context, string) (any, error)
+	KindleEmail(context.Context) (any, error)
+	SetKindleEmail(context.Context, string) (any, error)
+}
+
+type kindleEmailInput struct {
+	KindleEmail string `json:"kindle_email" jsonschema:"Kindle or PocketBook address (@kindle.com, @free.kindle.com or @pbsync.com); empty string removes it"`
 }
 
 type searchInput struct {
@@ -43,7 +49,7 @@ func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
 }
 
 func newServer(api tibiAPI, readOnly bool) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "tibi", Title: "Tibi e-books", Version: version}, &mcp.ServerOptions{Instructions: "Search Tibi e-books, inspect an edition, borrow it, send it to the Kindle address already configured on the Tibi profile, or get an EPUB download link for a borrowed book. Only borrow or send books requested by the user. Kindle delivery requires profile setup and Tibi's file-size eligibility. Do not retry an uncertain write automatically."})
+	s := mcp.NewServer(&mcp.Implementation{Name: "tibi", Title: "Tibi e-books", Version: version}, &mcp.ServerOptions{Instructions: "Search Tibi e-books, inspect an edition, borrow it, send it to the Kindle address already configured on the Tibi profile, get an EPUB download link for a borrowed book, or show and change the Kindle address on the profile. Only borrow or send books requested by the user. Kindle delivery requires profile setup and Tibi's file-size eligibility. Do not retry an uncertain write automatically."})
 	s.AddReceivingMiddleware(traceMCP)
 	yes, no := true, false
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &yes}
@@ -70,7 +76,18 @@ func newServer(api tibiAPI, readOnly bool) *mcp.Server {
 	}
 	addEdition("get_ebook", "Resolve a catalog_edition_id or edition_id to e-book editions and their borrowing and Kindle eligibility. Pass it as edition_id.", ro, api.Book)
 	addEdition("get_epub_link", "Get a direct EPUB download link for an already borrowed e-book, so another tool can fetch the file. The link needs no login and contains the borrower number: pass it only to the service that should fetch the book, and do not show it unless asked.", ro, api.EPUBLink)
+	mcp.AddTool(s, &mcp.Tool{Name: "get_kindle_email", Description: "Show the Kindle or PocketBook address stored on the Tibi profile, used by send_to_kindle.", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		v, err := api.KindleEmail(ctx)
+		return toolResult(v, err)
+	})
 	if !readOnly {
+		mcp.AddTool(s, &mcp.Tool{Name: "set_kindle_email", Description: "Change only the Kindle or PocketBook address on the Tibi profile. Other profile fields are kept. Remind the user to approve TL-administrator@nb.no as a sender at Amazon. Do not retry an uncertain result automatically.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &yes}}, func(ctx context.Context, _ *mcp.CallToolRequest, in kindleEmailInput) (*mcp.CallToolResult, any, error) {
+			if _, err := normalizeDeliveryEmail(in.KindleEmail); err != nil {
+				return toolError(err.Error()), nil, nil
+			}
+			v, err := api.SetKindleEmail(ctx, in.KindleEmail)
+			return toolResult(v, err)
+		})
 		addEdition("borrow_ebook", "Borrow the requested e-book edition. Does not send to Kindle.", write, api.Borrow)
 		addEdition("send_to_kindle", "Send an already borrowed, eligible e-book to the Kindle address configured on the Tibi profile. Do not retry an uncertain result automatically.", write, api.SendKindle)
 	}

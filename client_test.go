@@ -239,3 +239,76 @@ func TestEPUBLink(t *testing.T) {
 		})
 	}
 }
+
+func TestKindleEmail(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, set string
+		success, persist   bool
+		wantPosts          int
+		wantStatus         string
+		wantError          bool
+	}{
+		{"update", "old@kindle.com", "New@Kindle.com", true, true, 1, "updated", false},
+		{"clear", "old@kindle.com", "", true, true, 1, "updated", false},
+		{"pocketbook", "", "reader@pbsync.com", true, true, 1, "updated", false},
+		{"unchanged", "same@kindle.com", "same@kindle.com", true, true, 0, "unchanged", false},
+		{"arbitrary domain refused", "old@kindle.com", "someone@example.com", true, true, 0, "", true},
+		{"two addresses refused", "old@kindle.com", "a@kindle.com,b@kindle.com", true, true, 0, "", true},
+		{"upstream refused", "old@kindle.com", "new@kindle.com", false, false, 1, "", true},
+		{"not persisted", "old@kindle.com", "new@kindle.com", true, false, 1, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored, posts := tc.current, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/boker/book/GetBookPageByEdition":
+					json.NewEncoder(w).Encode(fakePage(true, false, false, 4))
+				case "/boker/patron/GetPatronData":
+					json.NewEncoder(w).Encode(map[string]any{"phoneNumber": "", "email": "private-mail@example.com", "kindleEmail": stored, "addressLine1": "private-address", "firstName": "private-name"})
+				case "/boker/patron/UpdatePatronProfile":
+					posts++
+					var body map[string]any
+					if r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" || json.NewDecoder(r.Body).Decode(&body) != nil {
+						t.Error("profile update must be a JSON POST")
+					}
+					if len(body) != 3 || body["phoneNumber"] != "" || body["email"] != "private-mail@example.com" {
+						t.Errorf("other profile fields must be sent back unchanged: %v", body)
+					}
+					if tc.persist {
+						stored, _ = body["kindleEmail"].(string)
+					}
+					json.NewEncoder(w).Encode(map[string]any{"success": tc.success, "friendlyErrorMessage": "private-upstream-error"})
+				default:
+					t.Errorf("unexpected route %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			c := newClient("", "")
+			c.base = srv.URL
+			v, err := c.SetKindleEmail(context.Background(), tc.set)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error=%v", err)
+			}
+			if posts != tc.wantPosts {
+				t.Fatalf("posts %d, want %d", posts, tc.wantPosts)
+			}
+			if err != nil {
+				if strings.Contains(err.Error(), "private-") {
+					t.Fatal("private data in error")
+				}
+				return
+			}
+			want := strings.ToLower(tc.set[strings.LastIndex(tc.set, "@")+1:])
+			if m := v.(map[string]any); m["status"] != tc.wantStatus || !strings.HasSuffix(m["kindle_email"].(string), want) {
+				t.Fatalf("unexpected result %v", m)
+			}
+			got, err := c.KindleEmail(context.Background())
+			if err != nil || got.(map[string]any)["kindle_email"] != stored {
+				t.Fatalf("get_kindle_email=%v err=%v", got, err)
+			}
+			if b, _ := json.Marshal(got); strings.Contains(string(b), "private-") {
+				t.Fatal("other profile fields leaked")
+			}
+		})
+	}
+}

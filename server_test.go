@@ -29,6 +29,10 @@ func (f *fakeAPI) Book(context.Context, string) (any, error)        { return f.r
 func (f *fakeAPI) Borrow(context.Context, string) (any, error)      { return f.result("borrow") }
 func (f *fakeAPI) SendKindle(context.Context, string) (any, error)  { return f.result("kindle") }
 func (f *fakeAPI) EPUBLink(context.Context, string) (any, error)    { return f.result("epub") }
+func (f *fakeAPI) KindleEmail(context.Context) (any, error)         { return f.result("kindle_email") }
+func (f *fakeAPI) SetKindleEmail(context.Context, string) (any, error) {
+	return f.result("set_kindle_email")
+}
 
 func session(t *testing.T, api tibiAPI, readOnly bool) *mcp.ClientSession {
 	t.Helper()
@@ -53,10 +57,10 @@ func TestReadOnlyDoesNotExposeWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 3 {
+	if len(list.Tools) != 4 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
-	for _, name := range []string{"borrow_ebook", "send_to_kindle"} {
+	for _, name := range []string{"borrow_ebook", "send_to_kindle", "set_kindle_email"} {
 		_, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"edition_id": "123"}})
 		if err == nil {
 			t.Fatalf("write %s accepted", name)
@@ -207,5 +211,21 @@ func TestSpansNeverContainPrivateInputsOrErrors(t *testing.T) {
 	}
 	if !foundTool || !foundHTTP {
 		t.Fatalf("missing tool or HTTP span: %v %v", foundTool, foundHTTP)
+	}
+}
+
+func TestSetKindleEmailRejectsArbitraryRecipients(t *testing.T) {
+	f := &fakeAPI{}
+	cs := session(t, f, false)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "set_kindle_email", Arguments: map[string]any{"kindle_email": "someone@example.com"}})
+	if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "kindle.com") {
+		t.Fatalf("arbitrary recipient accepted: %v", err)
+	}
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_kindle_email", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("get_kindle_email failed: %v", err)
+	}
+	if strings.Join(f.calls, ",") != "kindle_email" {
+		t.Fatal(f.calls)
 	}
 }

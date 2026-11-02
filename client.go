@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -340,6 +341,125 @@ func (c *client) contentLength(ctx context.Context, link string) int64 {
 		}
 	}
 	return 0
+}
+
+// Kindle and PocketBook delivery addresses Tibi supports. Other domains are
+// refused so the tool cannot redirect books to arbitrary recipients.
+var deliveryDomains = map[string]bool{"kindle.com": true, "free.kindle.com": true, "pbsync.com": true}
+
+func normalizeDeliveryEmail(addr string) (string, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", nil
+	}
+	i := strings.LastIndex(addr, "@")
+	if len(addr) > 254 || i < 1 || strings.ContainsAny(addr, " \t\r\n<>,;\"") {
+		return "", errors.New("give a Kindle or PocketBook address such as name@kindle.com")
+	}
+	domain := strings.ToLower(addr[i+1:])
+	if !deliveryDomains[domain] {
+		return "", errors.New("only @kindle.com, @free.kindle.com and @pbsync.com addresses are allowed")
+	}
+	return addr[:i+1] + domain, nil
+}
+
+type patronProfile struct {
+	PhoneNumber json.RawMessage `json:"phoneNumber"`
+	Email       json.RawMessage `json:"email"`
+	KindleEmail *string         `json:"kindleEmail"`
+}
+
+func (c *client) patron(ctx context.Context) (patronProfile, error) {
+	var p patronProfile
+	if _, err := c.page(ctx, kindleProbeEdition, true); err != nil {
+		return p, err
+	}
+	if err := c.json(ctx, "GET", "/patron/GetPatronData", url.Values{}, &p); err != nil {
+		return p, err
+	}
+	if p.KindleEmail == nil {
+		return p, errUpstream
+	}
+	return p, nil
+}
+
+// kindleProbeEdition is any public e-book page; fetching it establishes the
+// session the same way other tools do.
+const kindleProbeEdition = "629592"
+
+// KindleEmail returns the delivery address stored on the Tibi profile.
+func (c *client) KindleEmail(ctx context.Context) (any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.patron(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"kindle_email": *p.KindleEmail, "configured": *p.KindleEmail != ""}, nil
+}
+
+// SetKindleEmail changes only the Kindle address. Like Tibi's profile page it
+// sends phone number and e-mail back unchanged, then reads the profile again to
+// confirm. It is never retried.
+func (c *client) SetKindleEmail(ctx context.Context, addr string) (any, error) {
+	addr, err := normalizeDeliveryEmail(addr)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.patron(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if *p.KindleEmail == addr {
+		return map[string]any{"status": "unchanged", "kindle_email": addr}, nil
+	}
+	update := map[string]any{"phoneNumber": p.PhoneNumber, "email": p.Email, "kindleEmail": addr}
+	var reply struct {
+		Success bool `json:"success"`
+	}
+	if c.postJSON(ctx, "/patron/UpdatePatronProfile", update, &reply) != nil || !reply.Success {
+		return nil, errUncertain
+	}
+	after, err := c.patron(ctx)
+	if err != nil || *after.KindleEmail != addr {
+		return nil, errUncertain
+	}
+	return map[string]any{"status": "updated", "kindle_email": addr}, nil
+}
+
+// postJSON sends a JSON body like Tibi's fetch client. No redirects are followed
+// and nothing from the body or reply enters spans.
+func (c *client) postJSON(ctx context.Context, route string, body, out any) error {
+	ctx, span := otel.Tracer("tibi-mcp").Start(ctx, "POST "+route, trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+	b, err := json.Marshal(body)
+	if err != nil {
+		return errUpstream
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/boker"+route, bytes.NewReader(b))
+	if err != nil {
+		return errUpstream
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
+	if err != nil {
+		return errUpstream
+	}
+	defer resp.Body.Close()
+	span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
+	if resp.StatusCode != 200 {
+		return errUpstream
+	}
+	r, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+	if err != nil || len(r) > 1<<20 || json.Unmarshal(r, out) != nil {
+		return errUpstream
+	}
+	return nil
 }
 
 func (c *client) Borrow(ctx context.Context, id string) (any, error) { return c.action(ctx, id, false) }

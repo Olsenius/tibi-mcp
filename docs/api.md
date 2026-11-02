@@ -31,6 +31,8 @@ through MCP. Query parameters are URL-encoded.
 | POST | /patron/addBookToShelf | editionId | Client and live true response (2026-11-02) |
 | GET | /patron/SendToKindle | editionId | Client and live true response (2026-11-02); no delivery |
 | GET | /patron/getDownloadUrl | editionId, downloadFormat | Client and live response (2026-11-02) |
+| GET | /patron/GetPatronData | none | Client and live response (2026-11-02) |
+| POST | /patron/UpdatePatronProfile | JSON body | Static client only; `{success}` reply |
 
 Search's format facet returns `EBook`. Presentation cards can have an audio
 edition in `bookUrl` even when filtered to e-books; never borrow that identifier
@@ -61,6 +63,23 @@ URL whose path contains the borrower number, an opaque token and
 The link is a bearer capability that also carries personal data. The server
 accepts only https links on dod.nlb.no ending in `.epub`, returns them only in
 the tool result, and never puts them in spans, logs or errors.
+
+## Kindle address
+
+The profile page reads `GET /patron/GetPatronData` and shows `kindleEmail` as
+"Kindle e-post". The live response has many other personal fields (name,
+address, birth date, e-mail, phone numbers); the server passes on only
+`kindleEmail`.
+
+Saving the profile sends `POST /patron/UpdatePatronProfile` with a JSON body
+(`Content-Type: application/json`, no CSRF header) and gets
+`{success, friendlyErrorMessage}`. The edit form starts from
+`{phoneNumber, email, kindleEmail, address}`; `address` comes from
+`patronData.address`, which the live data does not have, so an unchanged
+address is left out. `set_kindle_email` therefore sends `phoneNumber` and
+`email` exactly as read and the new `kindleEmail`, then reads the profile again
+and requires the new value. The web form accepts any `.+@.+`; the server only
+accepts Kindle and PocketBook domains. A live update has not been made yet.
 
 ## Authentication
 

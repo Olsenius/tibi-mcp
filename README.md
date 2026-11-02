@@ -52,10 +52,15 @@ integrating another gateway deployment. Account configuration is environment-onl
    e-book, with filename, MIME type and size when known, so another tool can
    fetch the file. The link works without login and contains the borrower
    number: pass it only to the service that should fetch the book.
+6. `get_kindle_email()` shows the Kindle or PocketBook address on the profile.
+7. `set_kindle_email(kindle_email)` changes only that address. It accepts
+   `@kindle.com`, `@free.kindle.com` and `@pbsync.com` addresses, or an empty
+   string to remove it, and reads the profile again to confirm the change.
 
 Search hits can reference an audio edition of a work that also has an e-book;
 resolve them with `get_ebook` before borrowing. Writes reject non-e-book IDs.
-The two write tools are absent in read-only mode; `get_epub_link` is read-only. Never automatically retry a
+The write tools (`borrow_ebook`, `send_to_kindle`, `set_kindle_email`) are
+absent in read-only mode; `get_epub_link` and `get_kindle_email` are read-only. Never automatically retry a
 write after a timeout: the first request may have succeeded.
 
 Register the Kindle address under Tibi's profile and approve
@@ -63,7 +68,9 @@ Register the Kindle address under Tibi's profile and approve
 limit; server eligibility is taken from Tibi's current `showKindleButton`.
 See https://tibi.no/hjelp/medietyper/e-boker/kindle-pocketbook/. While Tibi's
 Kindle sending is out of order, `send_requested` does not lead to delivery.
-Profile changes and arbitrary e-mail recipients are not exposed as tools.
+The Kindle address is the only profile field the server can change, and only
+to Kindle or PocketBook domains, so books cannot be sent to arbitrary e-mail
+recipients.
 
 ## Verification
 
