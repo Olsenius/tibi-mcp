@@ -23,20 +23,40 @@ updated 2026-08-21). Kindle delivery therefore remains unverified.
 | `TIBI_CARD_NUMBER` | Tibi borrower number; not required for public searches |
 | `TIBI_PIN` | Tibi PIN |
 | `MCP_READ_ONLY` | Defaults to `true`; set `false` to expose borrowing and Kindle tools |
+| `CONFIG_TOKEN` | Bearer token for `/config` and `/healthz?check=1`; defaults to `MCP_AUTH_TOKEN` |
+| `DATA_DIR` | Where settings from the gateway are stored, default `/data` |
 | `MCP_TRANSPORT` | `http` (default) or `stdio` |
 | `PORT` | HTTP listen port, default `8080` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP HTTP endpoint; tracing otherwise disabled |
 
-Use a protected environment file, not tool arguments, for credentials. Login
-cookies are held in memory and lost at restart. Each process serves one account.
-Standard `OTEL_*` resource/exporter settings are supported with HTTP/protobuf.
-Do not place credentials or personal data in telemetry resource attributes.
+The account can be set in two ways: environment variables, or the settings page
+of [mcp-gateway](https://github.com/Olsenius/mcp-gateway). Environment variables
+always win and show as locked on the settings page. Settings from the gateway
+are stored in `DATA_DIR/state.json` (mode 0600), including the PIN. Login
+cookies are held in memory only and lost at restart. Each process serves one
+account. Standard `OTEL_*` resource/exporter settings are supported with
+HTTP/protobuf. Do not place credentials or personal data in telemetry resource
+attributes.
 
-Run `go run .` with the required environment, or build the Dockerfile. `/healthz`
-is a process liveness check, not proof of account access. Workspace Compose routes
-Tibi through the gateway without exposing a backend host port. Add
-`tibi=http://tibi:8080` to `UPSTREAMS` and configure `UPSTREAM_TOKEN_TIBI` when
-integrating another gateway deployment. Account configuration is environment-only.
+Run `go run .` with the required environment, or use the image
+`ghcr.io/olsenius/tibi-mcp:latest`, built from the Dockerfile on every push to
+main. Run it behind mcp-gateway: add `tibi=http://tibi:8080` to `UPSTREAMS`, set
+`UPSTREAM_TOKEN_TIBI` to the server's `MCP_AUTH_TOKEN`, and give the container a
+`/data` volume.
+
+## Gateway endpoints
+
+The server follows mcp-gateway's upstream contract:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Liveness, no auth |
+| `GET /healthz?check=1` | Logs in to Tibi and reports whether a Kindle address is set (never the address) |
+| `GET /config` | Settings schema and values; the PIN is never returned |
+| `POST /config` | `{"values": {...}, "clear": [...]}`; saves, then reloads without a restart |
+
+Settings: `TIBI_CARD_NUMBER`, `TIBI_PIN` and `MCP_READ_ONLY`. Turning
+read-only off adds the write tools at once; turning it on removes them.
 
 ## Tools
 

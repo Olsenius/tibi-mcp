@@ -9,11 +9,14 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/tibi-mcp .
+RUN mkdir -p -m 700 /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.source="https://github.com/Olsenius/tibi-mcp"
 COPY --from=build /out/tibi-mcp /tibi-mcp
-ENV PORT=8080 MCP_TRANSPORT=http
+COPY --from=build --chown=65532:65532 /out/data /data
+ENV PORT=8080 MCP_TRANSPORT=http DATA_DIR=/data
+VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD ["/tibi-mcp", "-healthcheck"]
 ENTRYPOINT ["/tibi-mcp"]

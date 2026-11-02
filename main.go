@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -46,10 +45,6 @@ func main() {
 }
 
 func run() error {
-	readOnly, err := strconv.ParseBool(env("MCP_READ_ONLY", "true"))
-	if err != nil {
-		return fmt.Errorf("MCP_READ_ONLY must be a boolean")
-	}
 	transport := env("MCP_TRANSPORT", "http")
 	if transport != "http" && transport != "stdio" {
 		return fmt.Errorf("MCP_TRANSPORT must be http or stdio")
@@ -58,6 +53,7 @@ func run() error {
 	if transport == "http" && token == "" {
 		return fmt.Errorf("MCP_AUTH_TOKEN is required for HTTP")
 	}
+	configToken := env("CONFIG_TOKEN", token)
 	shutdown, err := initTracing(context.Background())
 	if err != nil {
 		return fmt.Errorf("invalid tracing configuration")
@@ -67,13 +63,24 @@ func run() error {
 		defer cancel()
 		_ = shutdown(ctx)
 	}()
-	s := newServer(newClient(env("TIBI_CARD_NUMBER", ""), env("TIBI_PIN", "")), readOnly)
+	st, err := openStore(env("DATA_DIR", "/data"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning:", err)
+	}
+	a, err := newApp(st)
+	if err != nil {
+		return err
+	}
+	if !a.current().ready() {
+		fmt.Fprintln(os.Stderr, "warning: Tibi account not set up yet; account tools fail until the borrower number and PIN are set")
+	}
+	s := a.server
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if transport == "stdio" {
 		return s.Run(ctx, &mcp.StdioTransport{})
 	}
-	h := newHTTPHandler(s, token)
+	h := newHTTPHandler(s, token, func(mux *http.ServeMux) { a.registerConfigAPI(mux, configToken) })
 	srv := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan struct{})
 	go func() {

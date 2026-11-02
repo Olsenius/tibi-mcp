@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,9 @@ func toolError(message string) *mcp.CallToolResult {
 }
 
 func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
+	if errors.Is(err, errNotConfigured) {
+		return toolError(errNotConfigured.Error()), nil, nil
+	}
 	if err != nil {
 		return toolError("Tibi request failed. Check account setup and book availability. For a write, check the book status before retrying; the outcome may be unknown."), nil, nil
 	}
@@ -49,11 +53,10 @@ func toolResult(value any, err error) (*mcp.CallToolResult, any, error) {
 }
 
 func newServer(api tibiAPI, readOnly bool) *mcp.Server {
+	yes := true
 	s := mcp.NewServer(&mcp.Implementation{Name: "tibi", Title: "Tibi e-books", Version: version}, &mcp.ServerOptions{Instructions: "Search Tibi e-books, inspect an edition, borrow it, send it to the Kindle address already configured on the Tibi profile, get an EPUB download link for a borrowed book, or show and change the Kindle address on the profile. Only borrow or send books requested by the user. Kindle delivery requires profile setup and Tibi's file-size eligibility. Do not retry an uncertain write automatically."})
 	s.AddReceivingMiddleware(traceMCP)
-	yes, no := true, false
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &yes}
-	write := &mcp.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &yes}
 	mcp.AddTool(s, &mcp.Tool{Name: "search_ebooks", Description: "Search the Tibi catalog restricted to e-books.", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, any, error) {
 		in.Query = strings.TrimSpace(in.Query)
 		if in.Page == 0 {
@@ -81,17 +84,35 @@ func newServer(api tibiAPI, readOnly bool) *mcp.Server {
 		return toolResult(v, err)
 	})
 	if !readOnly {
-		mcp.AddTool(s, &mcp.Tool{Name: "set_kindle_email", Description: "Change only the Kindle or PocketBook address on the Tibi profile. Other profile fields are kept. Remind the user to approve TL-administrator@nb.no as a sender at Amazon. Do not retry an uncertain result automatically.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &yes}}, func(ctx context.Context, _ *mcp.CallToolRequest, in kindleEmailInput) (*mcp.CallToolResult, any, error) {
-			if _, err := normalizeDeliveryEmail(in.KindleEmail); err != nil {
-				return toolError(err.Error()), nil, nil
-			}
-			v, err := api.SetKindleEmail(ctx, in.KindleEmail)
-			return toolResult(v, err)
-		})
-		addEdition("borrow_ebook", "Borrow the requested e-book edition. Does not send to Kindle.", write, api.Borrow)
-		addEdition("send_to_kindle", "Send an already borrowed, eligible e-book to the Kindle address configured on the Tibi profile. Do not retry an uncertain result automatically.", write, api.SendKindle)
+		addWriteTools(s, api)
 	}
 	return s
+}
+
+// writeTools are registered only when the server is not read-only.
+var writeTools = []string{"set_kindle_email", "borrow_ebook", "send_to_kindle"}
+
+func addWriteTools(s *mcp.Server, api tibiAPI) {
+	yes, no := true, false
+	write := &mcp.ToolAnnotations{DestructiveHint: &no, OpenWorldHint: &yes}
+	addWrite := func(name, description string, fn func(context.Context, string) (any, error)) {
+		mcp.AddTool(s, &mcp.Tool{Name: name, Description: description, Annotations: write}, func(ctx context.Context, _ *mcp.CallToolRequest, in editionInput) (*mcp.CallToolResult, any, error) {
+			if strings.TrimSpace(in.EditionID) == "" || len(in.EditionID) > 100 {
+				return toolError("Provide edition_id from a Tibi e-book result."), nil, nil
+			}
+			v, err := fn(ctx, in.EditionID)
+			return toolResult(v, err)
+		})
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "set_kindle_email", Description: "Change only the Kindle or PocketBook address on the Tibi profile. Other profile fields are kept. Remind the user to approve TL-administrator@nb.no as a sender at Amazon. Do not retry an uncertain result automatically.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true, OpenWorldHint: &yes}}, func(ctx context.Context, _ *mcp.CallToolRequest, in kindleEmailInput) (*mcp.CallToolResult, any, error) {
+		if _, err := normalizeDeliveryEmail(in.KindleEmail); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
+		v, err := api.SetKindleEmail(ctx, in.KindleEmail)
+		return toolResult(v, err)
+	})
+	addWrite("borrow_ebook", "Borrow the requested e-book edition. Does not send to Kindle.", api.Borrow)
+	addWrite("send_to_kindle", "Send an already borrowed, eligible e-book to the Kindle address configured on the Tibi profile. Do not retry an uncertain result automatically.", api.SendKindle)
 }
 
 func requireToken(token string, next http.Handler) http.Handler {
@@ -105,9 +126,15 @@ func requireToken(token string, next http.Handler) http.Handler {
 	})
 }
 
-func newHTTPHandler(s *mcp.Server, token string) http.Handler {
+// newHTTPHandler serves /mcp and, through register, the gateway's /healthz and
+// /config endpoints. Without register only a plain /healthz is served.
+func newHTTPHandler(s *mcp.Server, token string, register func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	if register != nil {
+		register(mux)
+	} else {
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	}
 	mux.Handle("/mcp", requireToken(token, mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})))
 	return traceHTTP(mux)
 }

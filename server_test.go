@@ -112,7 +112,7 @@ func TestErrorsDoNotLeakUpstreamDetails(t *testing.T) {
 }
 
 func TestHTTPAuthentication(t *testing.T) {
-	h := newHTTPHandler(newServer(&fakeAPI{}, true), "synthetic-token")
+	h := newHTTPHandler(newServer(&fakeAPI{}, true), "synthetic-token", nil)
 	for _, token := range []string{"", "Bearer wrong"} {
 		r := httptest.NewRequest("POST", "/mcp", nil)
 		r.Header.Set("Authorization", token)
@@ -152,7 +152,7 @@ func TestTraceNamesRejectUntrustedInput(t *testing.T) {
 }
 
 func TestHTTPInitializeIsStateless(t *testing.T) {
-	h := newHTTPHandler(newServer(&fakeAPI{}, true), "synthetic-token")
+	h := newHTTPHandler(newServer(&fakeAPI{}, true), "synthetic-token", nil)
 	r := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"synthetic","version":"1"}}}`))
 	r.Header.Set("Authorization", "Bearer synthetic-token")
 	r.Header.Set("Content-Type", "application/json")
@@ -184,7 +184,7 @@ func TestSpansNeverContainPrivateInputsOrErrors(t *testing.T) {
 	_, _ = traceMCP(func(context.Context, string, mcp.Request) (mcp.Result, error) {
 		return nil, errors.New("private-error")
 	})(context.Background(), "private-method", nil)
-	h := newHTTPHandler(newServer(&fakeAPI{}, true), "private-auth-token")
+	h := newHTTPHandler(newServer(&fakeAPI{}, true), "private-auth-token", nil)
 	r := httptest.NewRequest("POST", "/mcp?private-query", strings.NewReader("private-body"))
 	r.Header.Set("Authorization", "Bearer private-auth-token")
 	r.Header.Set("Baggage", "secret=private-baggage")
