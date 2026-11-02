@@ -28,8 +28,8 @@ through MCP. Query parameters are URL-encoded.
 | --- | --- | --- | --- |
 | GET | /search/search | query, Format=EBook, page (1-based) | Client and public live response |
 | GET | /book/GetBookPageByEdition | editionId | Client and public live response |
-| POST | /patron/addBookToShelf | editionId | Static client only; boolean result |
-| GET | /patron/SendToKindle | editionId | Static client only; boolean result |
+| POST | /patron/addBookToShelf | editionId | Client and live true response (2026-11-02) |
+| GET | /patron/SendToKindle | editionId | Client and live true response (2026-11-02); no delivery |
 
 Search's format facet returns `EBook`. Presentation cards can have an audio
 edition in `bookUrl` even when filtered to e-books; never borrow that identifier
@@ -76,15 +76,22 @@ POST to the current pathname (without its OIDC query), form-encoded, with
 
 All steps were observed live with a real account on 2026-11-02, using only
 sanitized logs (methods, hosts, paths, status, component and cookie names).
-An authenticated book lookup returned `isAuthenticated=true`. Borrowing and
-Kindle delivery remain unverified against a real account. CAPTCHA or
-unexpected input fields
-fail closed and require signing in through the website.
+An authenticated book lookup returned `isAuthenticated=true`. CAPTCHA or
+unexpected input fields fail closed and require signing in through the website.
+
+## Live mutations (2026-11-02)
+
+- `addBookToShelf` returned `true`; the following book lookup showed
+  `isOnPatronShelf=true` and `showKindleButton=true`.
+- `SendToKindle` returned HTTP 200 with `true`, but nothing reached the device.
+  Tibi's Kindle help page (updated 2026-08-21) says sending to Kindle is broken
+  because of a technical fault. A `true` response is only Tibi accepting the
+  request.
 
 ## Remaining verification
 
 Run `go test -tags live -run TestLivePublicCatalog -v` for a public, read-only
 smoke test. It never loads credentials. To verify the remaining flow, the account
-owner must configure credentials privately, then check `get_ebook` reports
-`authenticated=true`. Borrow and send only a specifically requested title and
+owner must configure credentials privately. Login and borrowing are verified.
+Once Tibi repairs Kindle sending, send only a specifically requested title and
 confirm actual Kindle receipt. No production deployment or release is implied.

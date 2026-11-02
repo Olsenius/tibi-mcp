@@ -7,10 +7,12 @@ through mcp-gateway; the server uses stateless Streamable HTTP at `/mcp`.
 ## Status
 
 Public search and book detail routes have been checked against tibi.no.
-Real login with a borrower number and PIN has been verified: an authenticated
-book lookup returns `authenticated: true`. Borrowing and Kindle delivery still
-require account-owner verification. Synthetic tests cover those protocol paths;
-they do not prove live compatibility. No real book has been borrowed or sent.
+Verified against a real account on 2026-11-02: login with borrower number and
+PIN, an authenticated book lookup, and borrowing an e-book (`borrowed: true`
+afterwards). `send_to_kindle` reached Tibi, which answered `true`, but the book
+did not arrive. Tibi's help page states that Kindle sending is currently broken
+("På grunn av en teknisk feil er det ikke mulig å sende e-bøker til Kindle",
+updated 2026-08-21). Kindle delivery therefore remains unverified.
 
 ## Configuration
 
@@ -54,7 +56,8 @@ write after a timeout: the first request may have succeeded.
 Register the Kindle address under Tibi's profile and approve
 `TL-administrator@nb.no` in Amazon's approved senders. Tibi documents a 50 MB
 limit; server eligibility is taken from Tibi's current `showKindleButton`.
-See https://tibi.no/hjelp/medietyper/e-boker/kindle-pocketbook/.
+See https://tibi.no/hjelp/medietyper/e-boker/kindle-pocketbook/. While Tibi's
+Kindle sending is out of order, `send_requested` does not lead to delivery.
 Profile changes and arbitrary e-mail recipients are not exposed as tools.
 
 ## Verification
