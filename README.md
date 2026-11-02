@@ -7,10 +7,10 @@ through mcp-gateway; the server uses stateless Streamable HTTP at `/mcp`.
 ## Status
 
 Public search and book detail routes have been checked against tibi.no.
-The login selector and PIN form have been inspected without submitting account
-credentials. Successful real login, borrowing and Kindle delivery still require
-account-owner verification. Synthetic tests cover those protocol paths; they do
-not prove live authenticated compatibility. No real book has been borrowed or sent.
+Real login with a borrower number and PIN has been verified: an authenticated
+book lookup returns `authenticated: true`. Borrowing and Kindle delivery still
+require account-owner verification. Synthetic tests cover those protocol paths;
+they do not prove live compatibility. No real book has been borrowed or sent.
 
 ## Configuration
 

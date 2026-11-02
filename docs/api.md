@@ -65,13 +65,20 @@ POST to the current pathname (without its OIDC query), form-encoded, with
 3. The public auth client implements `Post` with props.url/form and `Redirect`
    with props.url. Follow only the expected Tibi/auth origins; a Post callback
    must target exactly `https://tibi.no/boker/auth/callback` and contain code/state.
-4. Require a callback return to `/boker/`, then independently fetch the book
-   details and require `isAuthenticated=true` before any write.
+4. POST the callback once without following its redirect. Observed live
+   (2026-11-02): the credential POST redirects back to the auth login page,
+   which returns `Post` to the callback. The callback sets the chunked
+   `.AspNetCore.Cookies` session and redirects to `/boker/Auth/Login`. That
+   endpoint always starts a new OIDC challenge, so following it loops into a
+   second sign-in. Accept a 200 or a same-origin 302/303 from the callback, then
+   independently fetch the book details and require `isAuthenticated=true`
+   before any write.
 
-Steps 1–2 (form discovery only) were observed live without submitting a PIN.
-Successful credential response, callback completion, authenticated book flags,
-borrowing and Kindle delivery remain unverified against a real account. Full
-login tests are synthetic protocol tests. CAPTCHA or unexpected input fields
+All steps were observed live with a real account on 2026-11-02, using only
+sanitized logs (methods, hosts, paths, status, component and cookie names).
+An authenticated book lookup returned `isAuthenticated=true`. Borrowing and
+Kindle delivery remain unverified against a real account. CAPTCHA or
+unexpected input fields
 fail closed and require signing in through the website.
 
 ## Remaining verification

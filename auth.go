@@ -70,7 +70,7 @@ func authenticate(ctx context.Context, hc *http.Client, baseURL, card, pin strin
 		return errAuthentication
 	}
 	var csrf string
-	selected, submitted, callback := false, false, false
+	selected, submitted := false, false
 	for step := 0; step < 8; step++ {
 		state, err := parseAuthState(body)
 		if err != nil {
@@ -123,7 +123,7 @@ func authenticate(ctx context.Context, hc *http.Client, baseURL, card, pin strin
 			submitted = true
 			target = authPath(current)
 		case "Post":
-			if !submitted || callback {
+			if !submitted {
 				return errAuthentication
 			}
 			target, err = current.Parse(state.Props.URL)
@@ -137,8 +137,7 @@ func authenticate(ctx context.Context, hc *http.Client, baseURL, card, pin strin
 			for k, v := range state.Props.Form {
 				values.Set(k, v)
 			}
-			callback = true
-			jsonResponse = false
+			return completeCallback(ctx, &client, base, target, values)
 		case "Redirect":
 			if !submitted {
 				return errAuthentication
@@ -159,9 +158,39 @@ func authenticate(ctx context.Context, hc *http.Client, baseURL, card, pin strin
 		if err != nil {
 			return errAuthentication
 		}
-		if callback && sameOrigin(base, current) && strings.HasPrefix(current.Path, "/boker/") && !strings.Contains(strings.ToLower(current.Path), "/auth/") {
-			return nil
+	}
+	return errAuthentication
+}
+
+// completeCallback posts the authorization code once and stops there. Tibi sets
+// its session cookie on the callback response and then redirects to
+// /boker/Auth/Login, which always starts a new sign-in, so the redirect is not
+// followed. Callers confirm the session with an isAuthenticated book lookup.
+func completeCallback(ctx context.Context, hc *http.Client, base, target *url.URL, values url.Values) error {
+	client := *hc
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	ctx, span := otel.Tracer("tibi-mcp").Start(ctx, "tibi authentication")
+	defer span.End()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), strings.NewReader(values.Encode()))
+	if err != nil {
+		return errAuthentication
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		return errAuthentication
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusFound, http.StatusSeeOther:
+		next, err := resp.Location()
+		if err != nil || !sameOrigin(base, next) {
+			return errAuthentication
 		}
+		return nil
 	}
 	return errAuthentication
 }
